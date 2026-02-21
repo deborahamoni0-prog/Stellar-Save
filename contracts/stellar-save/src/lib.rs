@@ -10,21 +10,40 @@
 //! - The process rotates until all members have received a payout
 //! 
 //! ## Modules
+//! - `events`: Event types for contract state change tracking
+//! - `error`: Comprehensive error types and handling
 //! - `group`: Core Group data structure and state management
+//! - `contribution`: Contribution record tracking for member payments
 //! - `payout`: Payout record tracking for fund distributions
 //! - `storage`: Storage key structure for efficient data access
 //! - `status`: Group lifecycle status enum with state transitions
 //! - `events`: Event definitions for contract actions
 
 pub mod events;
+pub mod error;
+pub mod contribution;
 pub mod group;
 pub mod payout;
 pub mod status;
 pub mod storage;
 
 // Re-export for convenience
-pub use group::Group;
+pub use events::*;
+pub use error::{StellarSaveError, ErrorCategory, ContractResult};
+pub use group::{Group, GroupStatus};
+pub use contribution::ContributionRecord;
 pub use payout::PayoutRecord;
 pub use status::{GroupStatus, StatusError};
 pub use storage::{StorageKey, StorageKeyBuilder};
 pub use events::EventEmitter;
+use soroban_sdk::{contract, contractimpl, Env};
+
+#[contract]
+pub struct StellarSaveContract;
+
+#[contractimpl]
+impl StellarSaveContract {
+    pub fn hello(env: Env) -> soroban_sdk::Symbol {
+        soroban_sdk::symbol_short!("hello")
+    }
+}
