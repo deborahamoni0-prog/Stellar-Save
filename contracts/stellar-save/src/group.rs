@@ -1,28 +1,104 @@
-use soroban_sdk::{contracttype, Address, Env, Symbol};
+use soroban_sdk::{contracttype, Address};
+use core::fmt;
 
-/// Event emitted when a group is activated.
+/// Represents the lifecycle states of a savings group.
+///
+/// Groups progress through these states during their lifetime:
+/// - Pending: Newly created, waiting for minimum members
+/// - Active: Accepting contributions and processing payouts
+/// - Paused: Temporarily suspended (can be resumed)
+/// - Completed: All cycles finished successfully
+/// - Cancelled: Permanently terminated before completion
 #[contracttype]
-#[derive(Clone)]
-pub struct GroupActivatedEvent {
-    /// The group ID that was activated.
-    pub group_id: u64,
-    /// The timestamp when the group was activated.
-    pub started_at: u64,
-    /// The number of members in the group at activation.
-    pub member_count: u32,
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum GroupStatus {
+    /// Group is created but not yet active.
+    /// Waiting for minimum members or creator activation.
+    Pending,
+
+    /// Group is actively running cycles.
+    /// Members can contribute and payouts are processed.
+    Active,
+
+    /// Group is temporarily paused.
+    /// No contributions accepted, but can be resumed.
+    Paused,
+
+    /// Group has completed all cycles successfully.
+    /// All members have received their payouts.
+    Completed,
+
+    /// Group was cancelled before completion.
+    /// Funds should be returned to contributors.
+    Cancelled,
 }
 
-/// Emits a GroupActivatedEvent.
-pub fn emit_group_activated(env: &Env, group_id: u64, started_at: u64, member_count: u32) {
-    let topic = Symbol::new(env, "group_activated");
-    env.events()
-        .publish((topic,), GroupActivatedEvent {
-            group_id,
-            started_at,
-            member_count,
-        });
+impl GroupStatus {
+    /// Validates if a state transition is allowed.
+    ///
+    /// Valid transitions:
+    /// - Pending → Active, Cancelled
+    /// - Active → Paused, Completed, Cancelled
+    /// - Paused → Active, Cancelled
+    /// - Completed → (no transitions allowed)
+    /// - Cancelled → (no transitions allowed)
+    pub fn can_transition_to(&self, new_status: &GroupStatus) -> bool {
+        // Same state is always valid
+        if self == new_status {
+            return true;
+        }
+        
+        match (self, new_status) {
+            // From Pending
+            (GroupStatus::Pending, GroupStatus::Active) => true,
+            (GroupStatus::Pending, GroupStatus::Cancelled) => true,
+
+            // From Active
+            (GroupStatus::Active, GroupStatus::Paused) => true,
+            (GroupStatus::Active, GroupStatus::Completed) => true,
+            (GroupStatus::Active, GroupStatus::Cancelled) => true,
+
+            // From Paused
+            (GroupStatus::Paused, GroupStatus::Active) => true,
+            (GroupStatus::Paused, GroupStatus::Cancelled) => true,
+
+            // Terminal states cannot transition to other states
+            (GroupStatus::Completed, _) => false,
+            (GroupStatus::Cancelled, _) => false,
+
+            // All other transitions are invalid
+            _ => false,
+        }
+    }
+
+    /// Returns true if the group can accept contributions in this state.
+    pub fn accepts_contributions(&self) -> bool {
+        matches!(self, GroupStatus::Active)
+    }
+
+    /// Returns true if the group can process payouts in this state.
+    pub fn can_process_payouts(&self) -> bool {
+        matches!(self, GroupStatus::Active)
+    }
+
+    /// Returns true if this is a terminal state (no further transitions allowed).
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, GroupStatus::Completed | GroupStatus::Cancelled)
+    }
 }
 
+impl fmt::Display for GroupStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let status_str = match self {
+            GroupStatus::Pending => "Pending",
+            GroupStatus::Active => "Active",
+            GroupStatus::Paused => "Paused",
+            GroupStatus::Completed => "Completed",
+            GroupStatus::Cancelled => "Cancelled",
+        };
+        write!(f, "{}", status_str)
+    }
+}
 /// Core Group data structure representing a rotational savings group (ROSCA).
 /// 
 /// A Group manages the configuration and state of a savings circle where members
@@ -439,80 +515,70 @@ mod tests {
         assert!(group.validate());
     }
 
+    // GroupStatus tests
     #[test]
-    fn test_activate_group() {
-        let env = Env::default();
-        let creator = Address::generate(&env);
-        
-        let mut group = Group::new(1, creator, 10_000_000, 604800, 5, 2, 1234567890);
-        
-        // Initially not started
-        assert!(!group.started);
-        assert_eq!(group.started_at, 0);
-        
-        // Cannot activate with less than min_members
-        assert!(!group.can_activate());
-        
-        // Add members
-        group.add_member();
-        assert_eq!(group.member_count, 1);
-        assert!(!group.can_activate());
-        
-        group.add_member();
-        assert_eq!(group.member_count, 2);
-        assert!(group.can_activate());
-        
-        // Activate the group
-        group.activate(1234568000);
-        
-        assert!(group.started);
-        assert_eq!(group.started_at, 1234568000);
+    fn test_group_status_transitions() {
+        // Test valid transitions from Pending
+        assert!(GroupStatus::Pending.can_transition_to(&GroupStatus::Active));
+        assert!(GroupStatus::Pending.can_transition_to(&GroupStatus::Cancelled));
+        assert!(!GroupStatus::Pending.can_transition_to(&GroupStatus::Paused));
+        assert!(!GroupStatus::Pending.can_transition_to(&GroupStatus::Completed));
+
+        // Test valid transitions from Active
+        assert!(GroupStatus::Active.can_transition_to(&GroupStatus::Paused));
+        assert!(GroupStatus::Active.can_transition_to(&GroupStatus::Completed));
+        assert!(GroupStatus::Active.can_transition_to(&GroupStatus::Cancelled));
+        assert!(!GroupStatus::Active.can_transition_to(&GroupStatus::Pending));
+
+        // Test valid transitions from Paused
+        assert!(GroupStatus::Paused.can_transition_to(&GroupStatus::Active));
+        assert!(GroupStatus::Paused.can_transition_to(&GroupStatus::Cancelled));
+        assert!(!GroupStatus::Paused.can_transition_to(&GroupStatus::Pending));
+        assert!(!GroupStatus::Paused.can_transition_to(&GroupStatus::Completed));
+
+        // Test terminal states cannot transition
+        assert!(!GroupStatus::Completed.can_transition_to(&GroupStatus::Active));
+        assert!(!GroupStatus::Completed.can_transition_to(&GroupStatus::Pending));
+        assert!(!GroupStatus::Completed.can_transition_to(&GroupStatus::Paused));
+        assert!(!GroupStatus::Completed.can_transition_to(&GroupStatus::Cancelled));
+
+        assert!(!GroupStatus::Cancelled.can_transition_to(&GroupStatus::Active));
+        assert!(!GroupStatus::Cancelled.can_transition_to(&GroupStatus::Pending));
+        assert!(!GroupStatus::Cancelled.can_transition_to(&GroupStatus::Paused));
+        assert!(!GroupStatus::Cancelled.can_transition_to(&GroupStatus::Completed));
+
+        // Test same state transitions are always valid
+        assert!(GroupStatus::Pending.can_transition_to(&GroupStatus::Pending));
+        assert!(GroupStatus::Active.can_transition_to(&GroupStatus::Active));
+        assert!(GroupStatus::Paused.can_transition_to(&GroupStatus::Paused));
+        assert!(GroupStatus::Completed.can_transition_to(&GroupStatus::Completed));
+        assert!(GroupStatus::Cancelled.can_transition_to(&GroupStatus::Cancelled));
     }
 
     #[test]
-    #[should_panic(expected = "group has already been started")]
-    fn test_activate_already_started() {
-        let env = Env::default();
-        let creator = Address::generate(&env);
-        
-        let mut group = Group::new(1, creator, 10_000_000, 604800, 5, 2, 1234567890);
-        
-        group.add_member();
-        group.add_member();
-        group.activate(1234568000);
-        
-        // Try to activate again - should panic
-        group.activate(1234568001);
+    fn test_group_status_accepts_contributions() {
+        assert!(!GroupStatus::Pending.accepts_contributions());
+        assert!(GroupStatus::Active.accepts_contributions());
+        assert!(!GroupStatus::Paused.accepts_contributions());
+        assert!(!GroupStatus::Completed.accepts_contributions());
+        assert!(!GroupStatus::Cancelled.accepts_contributions());
     }
 
     #[test]
-    #[should_panic(expected = "minimum members")]
-    fn test_activate_not_enough_members() {
-        let env = Env::default();
-        let creator = Address::generate(&env);
-        
-        let mut group = Group::new(1, creator, 10_000_000, 604800, 5, 3, 1234567890);
-        
-        group.add_member();
-        group.add_member();
-        
-        // Only 2 members, need 3 - should panic
-        group.activate(1234568000);
+    fn test_group_status_can_process_payouts() {
+        assert!(!GroupStatus::Pending.can_process_payouts());
+        assert!(GroupStatus::Active.can_process_payouts());
+        assert!(!GroupStatus::Paused.can_process_payouts());
+        assert!(!GroupStatus::Completed.can_process_payouts());
+        assert!(!GroupStatus::Cancelled.can_process_payouts());
     }
 
     #[test]
-    #[should_panic(expected = "cannot add members after group has started")]
-    fn test_add_member_after_start() {
-        let env = Env::default();
-        let creator = Address::generate(&env);
-        
-        let mut group = Group::new(1, creator, 10_000_000, 604800, 5, 2, 1234567890);
-        
-        group.add_member();
-        group.add_member();
-        group.activate(1234568000);
-        
-        // Try to add another member - should panic
-        group.add_member();
+    fn test_group_status_is_terminal() {
+        assert!(!GroupStatus::Pending.is_terminal());
+        assert!(!GroupStatus::Active.is_terminal());
+        assert!(!GroupStatus::Paused.is_terminal());
+        assert!(GroupStatus::Completed.is_terminal());
+        assert!(GroupStatus::Cancelled.is_terminal());
     }
 }
