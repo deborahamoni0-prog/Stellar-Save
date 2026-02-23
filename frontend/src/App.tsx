@@ -15,6 +15,7 @@ import {
   type LayoutNavItem,
   type SelectOption,
 } from "./ui";
+import { Dropdown } from "./components";
 
 function App() {
   const {
@@ -143,9 +144,51 @@ function App() {
           {error ? <Alert severity="error">{error}</Alert> : null}
         </Stack>
       </AppCard>
+
+      <AppCard>
+        <Stack spacing={2}>
+          <Typography variant="h2">Dropdown Component Demo</Typography>
+          
+          <Stack direction="row" spacing={2} flexWrap="wrap">
+            <Dropdown
+              trigger={<AppButton>Actions Menu</AppButton>}
+              items={[
+                { id: '1', label: 'Edit Profile', onClick: () => alert('Edit Profile') },
+                { id: '2', label: 'Settings', onClick: () => alert('Settings') },
+                { id: '3', label: 'divider', divider: true },
+                { id: '4', label: 'Logout', onClick: () => alert('Logout') },
+              ]}
+            />
+
+            <Dropdown
+              trigger={<AppButton color="secondary">With Icons</AppButton>}
+              items={[
+                { id: '1', label: 'Copy', icon: '📋', onClick: () => alert('Copied!') },
+                { id: '2', label: 'Share', icon: '🔗', onClick: () => alert('Shared!') },
+                { id: '3', label: 'Download', icon: '⬇️', onClick: () => alert('Downloaded!') },
+                { id: '4', label: 'divider', divider: true },
+                { id: '5', label: 'Delete', icon: '🗑️', onClick: () => alert('Deleted!') },
+              ]}
+              position="bottom-end"
+            />
+
+            <Dropdown
+              trigger={<AppButton>With Disabled Items</AppButton>}
+              items={[
+                { id: '1', label: 'Available Action', onClick: () => alert('Action!') },
+                { id: '2', label: 'Disabled Action', disabled: true },
+                { id: '3', label: 'Another Available', onClick: () => alert('Another!') },
+              ]}
+            />
+          </Stack>
+
+          <Typography variant="body2" color="text.secondary">
+            Try keyboard navigation: Arrow keys, Home, End, Enter, Escape
+          </Typography>
+        </Stack>
+      </AppCard>
     </AppLayout>
   );
-}
 }
 
 export default App;
