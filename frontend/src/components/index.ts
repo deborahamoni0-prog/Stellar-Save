@@ -8,3 +8,4 @@ export { GroupSkeleton } from "./Skeleton/GroupSkeleton";
 export { ContributionSkeleton } from "./Skeleton/ContributionSkeleton";
 export { WalletButton } from "./WalletButton";
 export { NetworkIndicator } from "./NetworkIndicator";
+export { SearchBar } from "./SearchBar";

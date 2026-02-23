@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   Alert,
   Box,
@@ -15,8 +16,12 @@ import {
   type LayoutNavItem,
   type SelectOption,
 } from "./ui";
+import { SearchBar } from "./components";
 
 function App() {
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isSearching, setIsSearching] = useState(false);
+  
   const {
     wallets,
     selectedWalletId,
@@ -31,6 +36,12 @@ function App() {
     switchWallet,
     switchAccount,
   } = useWallet();
+
+  const handleSearch = (value: string) => {
+    setSearchQuery(value);
+    setIsSearching(true);
+    setTimeout(() => setIsSearching(false), 500);
+  };
 
   const selectedWallet = wallets.find((wallet) => wallet.id === selectedWalletId);
   const canConnect = Boolean(selectedWallet?.installed) && status !== "connecting";
@@ -91,6 +102,23 @@ function App() {
             <Typography color="text.secondary" sx={{ mt: 0.75 }}>
               UI now uses a centralized MUI theme with reusable wrapper components.
             </Typography>
+          </Box>
+
+          <Box>
+            <Typography variant="subtitle2" sx={{ mb: 1 }}>
+              Search Demo
+            </Typography>
+            <SearchBar
+              placeholder="Search wallets or accounts..."
+              onSearch={handleSearch}
+              loading={isSearching}
+              debounceMs={300}
+            />
+            {searchQuery && (
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                Search query: {searchQuery}
+              </Typography>
+            )}
           </Box>
 
           <AppSelectField
