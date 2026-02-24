@@ -646,6 +646,53 @@ impl StellarSaveContract {
         Ok(total)
     }
 
+    /// Gets the payout received by a specific member.
+    /// 
+    /// # Arguments
+    /// * `env` - Soroban environment
+    /// * `group_id` - ID of the group
+    /// * `member_address` - Address of the member to query
+    /// 
+    /// # Returns
+    /// * `Ok(Option<PayoutRecord>)` - Payout record if member received one, None if not
+    /// * `Err(StellarSaveError)` - If group doesn't exist or member is not part of the group
+    pub fn get_member_payout(
+        env: Env,
+        group_id: u64,
+        member_address: Address,
+    ) -> Result<Option<PayoutRecord>, StellarSaveError> {
+        // Verify the group exists
+        let group_key = StorageKeyBuilder::group_data(group_id);
+        let group = env.storage()
+            .persistent()
+            .get::<_, Group>(&group_key)
+            .ok_or(StellarSaveError::GroupNotFound)?;
+
+        // Verify the member is part of the group
+        let member_key = StorageKeyBuilder::member_profile(group_id, member_address.clone());
+        if !env.storage().persistent().has(&member_key) {
+            return Err(StellarSaveError::NotMember);
+        }
+
+        // Query payout history for all cycles up to current_cycle
+        for cycle in 0..=group.current_cycle {
+            let payout_key = StorageKeyBuilder::payout_record(group_id, cycle);
+            
+            if let Some(payout_record) = env.storage()
+                .persistent()
+                .get::<_, PayoutRecord>(&payout_key)
+            {
+                // Filter by recipient
+                if payout_record.recipient == member_address {
+                    return Ok(Some(payout_record));
+                }
+            }
+        }
+        
+        // Member hasn't received any payout yet
+        Ok(None)
+    }
+
     /// Gets the complete payout schedule with dates for all members.
     /// 
     /// # Arguments
