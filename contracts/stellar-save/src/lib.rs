@@ -1431,7 +1431,8 @@ impl StellarSaveContract {
             .ok_or(StellarSaveError::Overflow)?;
         
         let next_cycle_end_time = cycle_multiplier
-            .checked_mul(group.cycle_duration)
+            .checked_mul(group.cycle_duration as u32)
+            .map(|duration| duration as u64)
             .and_then(|duration| group.started_at.checked_add(duration))
             .ok_or(StellarSaveError::Overflow)?;
         
