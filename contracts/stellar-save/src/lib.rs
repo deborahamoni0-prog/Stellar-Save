@@ -483,9 +483,50 @@ impl StellarSaveContract {
         }
         
         Ok(false)
-      
-      
     }
+
+    /// Checks if a payout is due for the current cycle of a group.
+    /// 
+    /// A payout is due if:
+    /// 1. The group is in Active status.
+    /// 2. All members have contributed for the current cycle (cycle complete).
+    /// 3. A payout has not already been executed for the current cycle.
+    /// 
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `group_id` - Unique identifier of the group.
+    /// 
+    /// # Returns
+    /// Returns true if a payout is due, false otherwise.
+    /// Returns StellarSaveError::GroupNotFound if the group doesn't exist.
+    pub fn is_payout_due(env: Env, group_id: u64) -> Result<bool, StellarSaveError> {
+        // 1. Load group data
+        let group_key = StorageKeyBuilder::group_data(group_id);
+        let group = env.storage()
+            .persistent()
+            .get::<_, Group>(&group_key)
+            .ok_or(StellarSaveError::GroupNotFound)?;
+
+        // 2. Check if group is active
+        if group.status != GroupStatus::Active {
+            return Ok(false);
+        }
+
+        // 3. Get pool information for current cycle
+        let pool_info = PoolCalculator::get_pool_info(&env, group_id, group.current_cycle)?;
+
+        // 4. Check if cycle is complete (all members contributed)
+        if !pool_info.is_cycle_complete {
+            return Ok(false);
+        }
+
+        // 5. Check if payout already executed for current cycle
+        let recipient_key = StorageKeyBuilder::payout_recipient(group_id, group.current_cycle);
+        let already_executed = env.storage().persistent().has(&recipient_key);
+
+        Ok(!already_executed)
+    }
+
     /// Returns the payout position for a member in a specific group.
     /// 
     /// # Arguments
