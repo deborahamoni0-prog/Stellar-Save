@@ -1168,6 +1168,87 @@ impl StellarSaveContract {
         Ok(())
     }
 
+    /// Allows members to withdraw their share in emergency situations.
+    /// 
+    /// Emergency conditions:
+    /// - Group has been inactive (no contributions) for 2+ cycle durations
+    /// - Group is not complete
+    /// 
+    /// # Arguments
+    /// * `env` - Soroban environment
+    /// * `group_id` - ID of the group
+    /// * `member` - Address of the member withdrawing
+    /// 
+    /// # Returns
+    /// * `Ok(())` - Withdrawal successful
+    /// * `Err(StellarSaveError)` - If conditions not met
+    pub fn emergency_withdraw(
+        env: Env,
+        group_id: u64,
+        member: Address,
+    ) -> Result<(), StellarSaveError> {
+        member.require_auth();
+        
+        let group_key = StorageKeyBuilder::group_data(group_id);
+        let mut group: Group = env.storage()
+            .persistent()
+            .get(&group_key)
+            .ok_or(StellarSaveError::GroupNotFound)?;
+        
+        let member_key = StorageKeyBuilder::member_profile(group_id, member.clone());
+        if !env.storage().persistent().has(&member_key) {
+            return Err(StellarSaveError::NotMember);
+        }
+        
+        if group.is_complete() {
+            return Err(StellarSaveError::InvalidState);
+        }
+        
+        let current_time = env.ledger().timestamp();
+        let last_activity_key = StorageKeyBuilder::contribution_cycle_total(group_id, group.current_cycle);
+        let last_activity_time: u64 = env.storage()
+            .persistent()
+            .get(&last_activity_key)
+            .unwrap_or(group.started_at);
+        
+        let inactive_duration = current_time.saturating_sub(last_activity_time);
+        let emergency_threshold = group.cycle_duration.saturating_mul(2);
+        
+        if inactive_duration < emergency_threshold {
+            return Err(StellarSaveError::InvalidState);
+        }
+        
+        let total_contributed = Self::get_member_total_contributions(
+            env.clone(),
+            group_id,
+            member.clone(),
+        )?;
+        
+        let has_received = Self::has_received_payout(
+            env.clone(),
+            group_id,
+            member.clone(),
+        )?;
+        
+        let withdrawal_amount = if has_received {
+            0
+        } else {
+            total_contributed
+        };
+        
+        if withdrawal_amount > 0 {
+            env.events().publish(
+                (Symbol::new(&env, "emergency_withdrawal"),),
+                (group_id, member.clone(), withdrawal_amount),
+            );
+        }
+        
+        let withdrawal_key = StorageKeyBuilder::member_profile(group_id, member.clone());
+        env.storage().persistent().remove(&withdrawal_key);
+        
+        Ok(())
+    }
+
     /// Activates a group once minimum members have joined.
     /// 
     /// # Arguments
@@ -3920,6 +4001,167 @@ mod tests {
         // Verify: Always returns same value
         assert_eq!(deadline1, deadline2);
         assert_eq!(deadline2, deadline3);
+    }
+    
+    #[test]
+    fn test_emergency_withdraw_not_member() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, StellarSaveContract);
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+        
+        let creator = Address::generate(&env);
+        let non_member = Address::generate(&env);
+        
+        let group_id = client.create_group(&creator, &100, &3600, &5);
+        
+        let result = client.try_emergency_withdraw(&group_id, &non_member);
+        assert_eq!(result, Err(Ok(StellarSaveError::NotMember)));
+    }
+    
+    #[test]
+    fn test_emergency_withdraw_group_complete() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, StellarSaveContract);
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+        
+        let creator = Address::generate(&env);
+        let group_id = client.create_group(&creator, &100, &3600, &3);
+        
+        client.join_group(&group_id, &creator);
+        
+        let mut group: Group = env.storage().persistent()
+            .get(&StorageKeyBuilder::group_data(group_id))
+            .unwrap();
+        group.status = GroupStatus::Completed;
+        env.storage().persistent().set(&StorageKeyBuilder::group_data(group_id), &group);
+        
+        let result = client.try_emergency_withdraw(&group_id, &creator);
+        assert_eq!(result, Err(Ok(StellarSaveError::InvalidState)));
+    }
+    
+    #[test]
+    fn test_emergency_withdraw_not_stalled() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, StellarSaveContract);
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+        
+        let creator = Address::generate(&env);
+        let cycle_duration = 3600u64;
+        let group_id = client.create_group(&creator, &100, &cycle_duration, &3);
+        
+        client.join_group(&group_id, &creator);
+        
+        let mut group: Group = env.storage().persistent()
+            .get(&StorageKeyBuilder::group_data(group_id))
+            .unwrap();
+        group.started = true;
+        group.started_at = env.ledger().timestamp();
+        env.storage().persistent().set(&StorageKeyBuilder::group_data(group_id), &group);
+        
+        let result = client.try_emergency_withdraw(&group_id, &creator);
+        assert_eq!(result, Err(Ok(StellarSaveError::InvalidState)));
+    }
+    
+    #[test]
+    fn test_emergency_withdraw_success() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, StellarSaveContract);
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+        
+        let creator = Address::generate(&env);
+        let member = Address::generate(&env);
+        let cycle_duration = 3600u64;
+        let group_id = client.create_group(&creator, &100, &cycle_duration, &3);
+        
+        client.join_group(&group_id, &creator);
+        client.join_group(&group_id, &member);
+        
+        let mut group: Group = env.storage().persistent()
+            .get(&StorageKeyBuilder::group_data(group_id))
+            .unwrap();
+        group.started = true;
+        let old_time = 1000000u64;
+        group.started_at = old_time;
+        env.storage().persistent().set(&StorageKeyBuilder::group_data(group_id), &group);
+        
+        env.ledger().with_mut(|li| {
+            li.timestamp = old_time + (cycle_duration * 3);
+        });
+        
+        let result = client.try_emergency_withdraw(&group_id, &member);
+        assert!(result.is_ok());
+    }
+    
+    #[test]
+    fn test_emergency_withdraw_removes_member() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, StellarSaveContract);
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+        
+        let creator = Address::generate(&env);
+        let member = Address::generate(&env);
+        let cycle_duration = 3600u64;
+        let group_id = client.create_group(&creator, &100, &cycle_duration, &3);
+        
+        client.join_group(&group_id, &creator);
+        client.join_group(&group_id, &member);
+        
+        let mut group: Group = env.storage().persistent()
+            .get(&StorageKeyBuilder::group_data(group_id))
+            .unwrap();
+        group.started = true;
+        let old_time = 1000000u64;
+        group.started_at = old_time;
+        env.storage().persistent().set(&StorageKeyBuilder::group_data(group_id), &group);
+        
+        env.ledger().with_mut(|li| {
+            li.timestamp = old_time + (cycle_duration * 3);
+        });
+        
+        let member_key = StorageKeyBuilder::member_profile(group_id, member.clone());
+        assert!(env.storage().persistent().has(&member_key));
+        
+        client.emergency_withdraw(&group_id, &member);
+        
+        assert!(!env.storage().persistent().has(&member_key));
+    }
+    
+    #[test]
+    fn test_emergency_withdraw_emits_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, StellarSaveContract);
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+        
+        let creator = Address::generate(&env);
+        let member = Address::generate(&env);
+        let cycle_duration = 3600u64;
+        let group_id = client.create_group(&creator, &100, &cycle_duration, &3);
+        
+        client.join_group(&group_id, &creator);
+        client.join_group(&group_id, &member);
+        
+        let mut group: Group = env.storage().persistent()
+            .get(&StorageKeyBuilder::group_data(group_id))
+            .unwrap();
+        group.started = true;
+        let old_time = 1000000u64;
+        group.started_at = old_time;
+        env.storage().persistent().set(&StorageKeyBuilder::group_data(group_id), &group);
+        
+        env.ledger().with_mut(|li| {
+            li.timestamp = old_time + (cycle_duration * 3);
+        });
+        
+        client.emergency_withdraw(&group_id, &member);
+        
+        let events = env.events().all();
+        assert!(events.len() > 0);
     }
 }
 
