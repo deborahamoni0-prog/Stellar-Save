@@ -40,7 +40,7 @@ pub use pool::{PoolInfo, PoolCalculator};
 pub use events::EventEmitter;
 use soroban_sdk::{
     contracttype, contractimpl, contracterror, Address, Env, Vec, Map, symbol_short,
-    panic_with_error
+    panic_with_error, Symbol
 };
 use core::cmp;
 
