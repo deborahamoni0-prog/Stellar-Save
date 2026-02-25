@@ -787,6 +787,39 @@ impl StellarSaveContract {
         Ok(None)
     }
 
+    /// Retrieves payout details for a specific cycle.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `group_id` - The ID of the group
+    /// * `cycle` - The cycle number to retrieve payout for
+    ///
+    /// # Returns
+    /// * `Ok(PayoutRecord)` - The payout record for the specified cycle
+    /// * `Err(StellarSaveError::GroupNotFound)` - If the group doesn't exist
+    /// * `Err(StellarSaveError::PayoutFailed)` - If no payout exists for this cycle
+    ///
+    /// # Example
+    /// ```ignore
+    /// let payout = contract.get_payout(env, 1, 0)?;
+    /// assert_eq!(payout.cycle_number, 0);
+    /// ```
+    pub fn get_payout(
+        env: Env,
+        group_id: u64,
+        cycle: u32,
+    ) -> Result<PayoutRecord, StellarSaveError> {
+        // Verify group exists
+        let _group = Self::get_group(env.clone(), group_id)?;
+
+        // Load payout from storage
+        let key = StorageKeyBuilder::payout_record(group_id, cycle);
+        let payout: Option<PayoutRecord> = env.storage().persistent().get(&key);
+
+        // Handle not found
+        payout.ok_or(StellarSaveError::PayoutFailed)
+    }
+
     /// Gets the complete payout schedule with dates for all members.
     ///
     /// # Arguments
@@ -6884,6 +6917,139 @@ mod tests {
         });
         
         assert!(payout_event.is_some());
+    }
+
+    #[test]
+    fn test_get_payout_success() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(StellarSaveContract, ());
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+
+        let creator = Address::generate(&env);
+        let group_id = client.create_group(&creator, &100, &3600, &3);
+
+        client.join_group(&group_id, &creator);
+
+        // Create a payout record
+        let payout = PayoutRecord::new(creator.clone(), group_id, 0, 300, 1234567890);
+        let key = StorageKeyBuilder::payout_record(group_id, 0);
+        env.storage().persistent().set(&key, &payout);
+
+        // Retrieve the payout
+        let result = client.get_payout(&group_id, &0);
+        assert_eq!(result.recipient, creator);
+        assert_eq!(result.group_id, group_id);
+        assert_eq!(result.cycle_number, 0);
+        assert_eq!(result.amount, 300);
+        assert_eq!(result.timestamp, 1234567890);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #4001)")]
+    fn test_get_payout_not_found() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(StellarSaveContract, ());
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+
+        let creator = Address::generate(&env);
+        let group_id = client.create_group(&creator, &100, &3600, &3);
+
+        client.join_group(&group_id, &creator);
+
+        // Try to get a payout that doesn't exist
+        client.get_payout(&group_id, &0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #1001)")]
+    fn test_get_payout_group_not_found() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(StellarSaveContract, ());
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+
+        // Try to get a payout for a non-existent group
+        client.get_payout(&999, &0);
+    }
+
+    #[test]
+    fn test_get_payout_multiple_cycles() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(StellarSaveContract, ());
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+
+        let creator = Address::generate(&env);
+        let member1 = Address::generate(&env);
+        let member2 = Address::generate(&env);
+        let group_id = client.create_group(&creator, &100, &3600, &3);
+
+        client.join_group(&group_id, &creator);
+        client.join_group(&group_id, &member1);
+        client.join_group(&group_id, &member2);
+
+        // Create payout records for multiple cycles
+        let payout0 = PayoutRecord::new(creator.clone(), group_id, 0, 300, 1234567890);
+        let payout1 = PayoutRecord::new(member1.clone(), group_id, 1, 300, 1234571490);
+        let payout2 = PayoutRecord::new(member2.clone(), group_id, 2, 300, 1234575090);
+
+        let key0 = StorageKeyBuilder::payout_record(group_id, 0);
+        let key1 = StorageKeyBuilder::payout_record(group_id, 1);
+        let key2 = StorageKeyBuilder::payout_record(group_id, 2);
+
+        env.storage().persistent().set(&key0, &payout0);
+        env.storage().persistent().set(&key1, &payout1);
+        env.storage().persistent().set(&key2, &payout2);
+
+        // Retrieve each payout
+        let result0 = client.get_payout(&group_id, &0);
+        assert_eq!(result0.recipient, creator);
+        assert_eq!(result0.cycle_number, 0);
+
+        let result1 = client.get_payout(&group_id, &1);
+        assert_eq!(result1.recipient, member1);
+        assert_eq!(result1.cycle_number, 1);
+
+        let result2 = client.get_payout(&group_id, &2);
+        assert_eq!(result2.recipient, member2);
+        assert_eq!(result2.cycle_number, 2);
+    }
+
+    #[test]
+    fn test_get_payout_different_groups() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(StellarSaveContract, ());
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+
+        let creator1 = Address::generate(&env);
+        let creator2 = Address::generate(&env);
+        let group_id1 = client.create_group(&creator1, &100, &3600, &3);
+        let group_id2 = client.create_group(&creator2, &200, &7200, &5);
+
+        client.join_group(&group_id1, &creator1);
+        client.join_group(&group_id2, &creator2);
+
+        // Create payout records for different groups
+        let payout1 = PayoutRecord::new(creator1.clone(), group_id1, 0, 300, 1234567890);
+        let payout2 = PayoutRecord::new(creator2.clone(), group_id2, 0, 1000, 1234567890);
+
+        let key1 = StorageKeyBuilder::payout_record(group_id1, 0);
+        let key2 = StorageKeyBuilder::payout_record(group_id2, 0);
+
+        env.storage().persistent().set(&key1, &payout1);
+        env.storage().persistent().set(&key2, &payout2);
+
+        // Retrieve payouts for each group
+        let result1 = client.get_payout(&group_id1, &0);
+        assert_eq!(result1.group_id, group_id1);
+        assert_eq!(result1.amount, 300);
+
+        let result2 = client.get_payout(&group_id2, &0);
+        assert_eq!(result2.group_id, group_id2);
+        assert_eq!(result2.amount, 1000);
     }
 
     #[test]
