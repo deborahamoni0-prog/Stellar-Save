@@ -1254,6 +1254,27 @@ impl StellarSaveContract {
         env.storage().persistent().get(&key).unwrap_or(0)
     }
 
+    /// Gets the total XLM balance held by the contract.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment
+    ///
+    /// # Returns
+    /// Returns the contract's current XLM balance in stroops (1 XLM = 10^7 stroops).
+    /// 
+    /// # Note
+    /// This is a placeholder implementation. To get the actual balance, you would need to:
+    /// 1. Get the native token contract address
+    /// 2. Create a token client for the native asset
+    /// 3. Query the balance for this contract's address
+    pub fn get_contract_balance(_env: Env) -> i128 {
+        // Placeholder: Return 0
+        // In production, query the native token contract:
+        // let native_token = token::Client::new(&env, &native_token_address);
+        // native_token.balance(&env.current_contract_address())
+        0
+    }
+
     /// Gets the total amount contributed by a member across all cycles.
     ///
     /// # Arguments
@@ -2274,6 +2295,19 @@ mod tests {
 
         let count = client.get_total_groups_created();
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_get_contract_balance() {
+        let env = Env::default();
+        env.mock_all_auths();
+        
+        let contract_id = env.register(StellarSaveContract, ());
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+
+        // Query initial balance
+        let balance = client.get_contract_balance();
+        assert_eq!(balance, 0);
     }
 
     #[test]
