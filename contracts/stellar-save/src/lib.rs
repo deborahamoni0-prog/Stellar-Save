@@ -152,6 +152,36 @@ impl StellarSaveContract {
         Ok(())
     }
 
+    /// Validates that a cycle duration is within the allowed range.
+    ///
+    /// Checks the provided cycle duration against the contract's configured
+    /// minimum and maximum cycle duration limits.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment for storage access
+    /// * `cycle_duration` - The cycle duration to validate (in seconds)
+    ///
+    /// # Returns
+    /// * `Ok(())` - The cycle duration is valid
+    /// * `Err(StellarSaveError::InvalidState)` - Duration is outside allowed range
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Validate a 7-day cycle (604800 seconds)
+    /// StellarSaveContract::validate_cycle_duration(&env, 604800)?;
+    /// ```
+    pub fn validate_cycle_duration(env: &Env, cycle_duration: u64) -> Result<(), StellarSaveError> {
+        let config_key = StorageKeyBuilder::contract_config();
+        
+        if let Some(config) = env.storage().persistent().get::<_, ContractConfig>(&config_key) {
+            if cycle_duration < config.min_cycle_duration || cycle_duration > config.max_cycle_duration {
+                return Err(StellarSaveError::InvalidState);
+            }
+        }
+        
+        Ok(())
+    }
+
     /// Records a contribution in storage and updates member statistics.
     ///
     /// This is an internal helper function that handles all the storage operations
@@ -4162,6 +4192,101 @@ mod tests {
         });
         assert!(result2.is_err());
         assert_eq!(result2.unwrap_err(), StellarSaveError::InvalidAmount);
+    }
+
+    // Tests for validate_cycle_duration function
+
+    #[test]
+    fn test_validate_cycle_duration_valid() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(StellarSaveContract, ());
+
+        // Set up config with min=3600 (1 hour), max=2592000 (30 days)
+        let config = ContractConfig {
+            admin,
+            min_contribution: 1_000_000,
+            max_contribution: 1_000_000_000,
+            min_members: 2,
+            max_members: 100,
+            min_cycle_duration: 3600,
+            max_cycle_duration: 2592000,
+        };
+        env.storage()
+            .persistent()
+            .set(&StorageKeyBuilder::contract_config(), &config);
+
+        // Test valid duration (7 days)
+        let result = env.as_contract(&contract_id, || {
+            StellarSaveContract::validate_cycle_duration(&env, 604800)
+        });
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_cycle_duration_too_short() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(StellarSaveContract, ());
+
+        let config = ContractConfig {
+            admin,
+            min_contribution: 1_000_000,
+            max_contribution: 1_000_000_000,
+            min_members: 2,
+            max_members: 100,
+            min_cycle_duration: 3600,
+            max_cycle_duration: 2592000,
+        };
+        env.storage()
+            .persistent()
+            .set(&StorageKeyBuilder::contract_config(), &config);
+
+        // Test duration below minimum
+        let result = env.as_contract(&contract_id, || {
+            StellarSaveContract::validate_cycle_duration(&env, 1800)
+        });
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), StellarSaveError::InvalidState);
+    }
+
+    #[test]
+    fn test_validate_cycle_duration_too_long() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(StellarSaveContract, ());
+
+        let config = ContractConfig {
+            admin,
+            min_contribution: 1_000_000,
+            max_contribution: 1_000_000_000,
+            min_members: 2,
+            max_members: 100,
+            min_cycle_duration: 3600,
+            max_cycle_duration: 2592000,
+        };
+        env.storage()
+            .persistent()
+            .set(&StorageKeyBuilder::contract_config(), &config);
+
+        // Test duration above maximum
+        let result = env.as_contract(&contract_id, || {
+            StellarSaveContract::validate_cycle_duration(&env, 3000000)
+        });
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), StellarSaveError::InvalidState);
+    }
+
+    #[test]
+    fn test_validate_cycle_duration_no_config() {
+        let env = Env::default();
+        let contract_id = env.register(StellarSaveContract, ());
+
+        // Test without config (should pass)
+        let result = env.as_contract(&contract_id, || {
+            StellarSaveContract::validate_cycle_duration(&env, 604800)
+        });
+        assert!(result.is_ok());
     }
 
     // Tests for get_missed_contributions function
