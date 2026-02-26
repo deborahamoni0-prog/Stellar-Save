@@ -27,6 +27,7 @@ pub mod payout;
 pub mod status;
 pub mod storage;
 pub mod pool;
+pub mod helpers;
 
 // Re-export for convenience
 pub use events::*;
@@ -38,6 +39,7 @@ pub use status::StatusError;
 pub use storage::{StorageKey, StorageKeyBuilder};
 pub use pool::{PoolInfo, PoolCalculator};
 pub use events::EventEmitter;
+pub use helpers::format_group_id;
 use soroban_sdk::{contract, contractimpl, contracttype, Env, Address, Vec, Symbol};
 
 #[contract]
