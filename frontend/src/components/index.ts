@@ -25,3 +25,5 @@ export type { Member } from "./MemberList";
 export { JoinGroupButton } from "./JoinGroupButton";
 export { GroupFilters } from "./GroupFilters";
 export type { FilterState, GroupStatus, SortOption } from "./GroupFilters";
+export { CycleProgress } from "./CycleProgress";
+export type { CycleProgressProps } from "./CycleProgress";
