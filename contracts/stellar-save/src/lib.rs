@@ -1451,6 +1451,17 @@ impl StellarSaveContract {
         env.storage().persistent().get(&key).unwrap_or(0)
     }
 
+    /// Returns the current ledger timestamp as Unix epoch seconds.
+    ///
+    /// This is the canonical time source for all time-dependent logic in the contract.
+    /// It performs no storage reads or writes and does not check pause state.
+    ///
+    /// # Returns
+    /// The current ledger timestamp as `u64` (Unix epoch seconds).
+    pub fn get_current_timestamp(env: Env) -> u64 {
+        env.ledger().timestamp()
+    }
+
     /// Gets the total XLM balance held by the contract.
     ///
     /// # Arguments
@@ -8186,5 +8197,65 @@ mod tests {
                 _ => ()
             }
         }
+    }
+
+    // --- get_current_timestamp tests ---
+
+    #[test]
+    fn test_get_current_timestamp_basic() {
+        let env = Env::default();
+        let contract_id = env.register(StellarSaveContract, ());
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+
+        let t: u64 = 1_700_000_000;
+        env.ledger().with_mut(|l| l.timestamp = t);
+
+        let result = client.get_current_timestamp();
+        assert_eq!(result, t);
+    }
+
+    #[test]
+    fn test_get_current_timestamp_idempotence() {
+        let env = Env::default();
+        let contract_id = env.register(StellarSaveContract, ());
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+
+        let t: u64 = 1_600_000_000;
+        env.ledger().with_mut(|l| l.timestamp = t);
+
+        let result1 = client.get_current_timestamp();
+        let result2 = client.get_current_timestamp();
+        assert_eq!(result1, result2);
+    }
+
+    #[test]
+    fn test_get_current_timestamp_nonzero() {
+        let env = Env::default();
+        let contract_id = env.register(StellarSaveContract, ());
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+
+        let t: u64 = 42;
+        env.ledger().with_mut(|l| l.timestamp = t);
+
+        let result = client.get_current_timestamp();
+        assert!(result > 0);
+    }
+
+    #[test]
+    fn test_get_current_timestamp_paused_contract() {
+        let env = Env::default();
+        let contract_id = env.register(StellarSaveContract, ());
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+
+        let t: u64 = 1_500_000_000;
+        env.ledger().with_mut(|l| l.timestamp = t);
+
+        // Manually set the pause flag in storage (simulates a paused contract)
+        let pause_key = StorageKeyBuilder::emergency_pause();
+        env.storage().persistent().set(&pause_key, &true);
+
+        // get_current_timestamp must still return the correct timestamp even when paused
+        let result = client.get_current_timestamp();
+        assert_eq!(result, t);
     }
 }
