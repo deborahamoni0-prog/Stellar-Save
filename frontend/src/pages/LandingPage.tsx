@@ -1,11 +1,10 @@
 import {
   Box,
   Container,
-  Grid2 as Grid,
+  Grid,
   Stack,
   Typography,
   useTheme,
-  useMediaQuery,
 } from "@mui/material";
 import { AppButton } from "../ui/components/AppButton";
 import { AppCard } from "../ui/components/AppCard";
@@ -16,7 +15,6 @@ import { AppCard } from "../ui/components/AppCard";
  */
 export default function LandingPage() {
   const theme = useTheme();
-  const isMobile = useMediaQuery(theme.breakpoints.down("md"));
 
   return (
     <Box
