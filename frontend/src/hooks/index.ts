@@ -6,6 +6,16 @@ export { useGroup } from './useGroup';
 export { useGroups } from './useGroups';
 export { useMembers } from './useMembers';
 export { useContributions } from './useContributions';
+export {
+  breakpoints,
+  mediaQueries,
+  only,
+  up,
+  down,
+  between,
+  useMediaQuery,
+} from './useMediaQuery';
+export type { Breakpoint } from './useMediaQuery';
 export { useBalance } from './useBalance';
 export type { Balance, BalanceState, UseBalanceOptions } from './useBalance';
 
@@ -14,3 +24,6 @@ export type { TransactionStatus, TransactionResult, UseTransactionReturn } from 
 export { useTransactions } from './useTransactions';
 export { useUserProfile } from './useUserProfile';
 export { useWallet } from './useWallet';
+export { useClipboard } from './useClipboard';
+export type { UseClipboardOptions, UseClipboardReturn } from './useClipboard';
+export { usePayouts } from './usePayouts';
