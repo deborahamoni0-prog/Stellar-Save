@@ -93,6 +93,24 @@ pub struct ContractUnpaused {
     pub timestamp: u64,
 }
 
+/// Event emitted when a cycle starts.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CycleStarted {
+    pub group_id: u64,
+    pub cycle_id: u32,
+    pub started_at: u64,
+}
+
+/// Event emitted when a cycle ends (transitions to next).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CycleEnded {
+    pub group_id: u64,
+    pub cycle_id: u32,
+    pub ended_at: u64,
+}
+
 /// Utility functions for emitting events.
 pub struct EventEmitter;
 
@@ -231,6 +249,16 @@ impl EventEmitter {
     pub fn emit_contract_unpaused(env: &Env, admin: Address, timestamp: u64) {
         let event = ContractUnpaused { admin, timestamp };
         env.events().publish(("contract_unpaused",), event);
+    }
+
+    pub fn emit_cycle_started(env: &Env, group_id: u64, cycle_id: u32, started_at: u64) {
+        let event = CycleStarted { group_id, cycle_id, started_at };
+        env.events().publish(("cycle_started",), event);
+    }
+
+    pub fn emit_cycle_ended(env: &Env, group_id: u64, cycle_id: u32, ended_at: u64) {
+        let event = CycleEnded { group_id, cycle_id, ended_at };
+        env.events().publish(("cycle_ended",), event);
     }
 }
 

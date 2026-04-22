@@ -28,6 +28,7 @@ pub mod payout_executor;
 pub mod pool;
 pub mod status;
 pub mod storage;
+pub mod cycle_advancement;
 
 // Re-export for convenience
 pub use contribution::ContributionRecord;
@@ -2710,6 +2711,31 @@ pub fn is_member(
         env.storage().persistent().set(&status_key, &true);
 
         Ok(())
+    }
+
+    /// Advances the group to the next cycle when the current cycle's deadline has passed.
+    ///
+    /// This is the time-based cycle progression entry point. It checks whether
+    /// enough time has elapsed since the group started to warrant moving to the
+    /// next cycle, then performs the transition atomically.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment
+    /// * `group_id` - ID of the group to advance
+    /// * `caller` - Address of the caller (used for event attribution)
+    ///
+    /// # Returns
+    /// * `Ok(true)` - Cycle was advanced successfully
+    /// * `Ok(false)` - No advancement needed (deadline not yet reached)
+    /// * `Err(StellarSaveError::GroupNotFound)` - Group does not exist
+    /// * `Err(StellarSaveError::InvalidState)` - Group is not active / not started / already complete
+    pub fn advance_cycle_for_group(
+        env: Env,
+        group_id: u64,
+        caller: Address,
+    ) -> Result<bool, StellarSaveError> {
+        caller.require_auth();
+        crate::cycle_advancement::try_advance_cycle(&env, group_id, &caller)
     }
 }
 
