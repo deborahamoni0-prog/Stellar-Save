@@ -20,11 +20,13 @@
 //! - `events`: Event definitions for contract actions
 
 pub mod contribution;
+pub mod cycle_advancement;
 pub mod error;
 pub mod events;
 pub mod group;
 pub mod payout;
 pub mod payout_executor;
+pub mod penalty;
 pub mod pool;
 pub mod status;
 pub mod storage;
@@ -2709,6 +2711,125 @@ pub fn is_member(
         let status_key = StorageKeyBuilder::payout_status(group_id, cycle_number);
         env.storage().persistent().set(&status_key, &true);
 
+        Ok(())
+    }
+
+    // ─── Penalty System ───────────────────────────────────────────────────────
+
+    /// Applies a penalty to a member who missed a contribution deadline.
+    ///
+    /// Called by the group creator or automatically during cycle advancement.
+    /// Deducts a percentage of the contribution amount from the group balance
+    /// and records the event in the member's penalty history.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment
+    /// * `group_id` - ID of the group
+    /// * `member` - Address of the member who missed the contribution
+    /// * `cycle_id` - The cycle that was missed
+    ///
+    /// # Returns
+    /// * `Ok(i128)` - Penalty amount deducted in stroops
+    /// * `Err(StellarSaveError)` - If group/member not found or overflow
+    pub fn apply_penalty(
+        env: Env,
+        group_id: u64,
+        member: Address,
+        cycle_id: u32,
+    ) -> Result<i128, StellarSaveError> {
+        penalty::apply_penalty(&env, group_id, member, cycle_id)
+    }
+
+    /// Allows a member to recover from a penalty by paying the missed
+    /// contribution plus a recovery fee (default 10% of contribution amount).
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment
+    /// * `group_id` - ID of the group
+    /// * `member` - Address of the recovering member
+    /// * `cycle_id` - The cycle being recovered
+    /// * `amount_paid` - Total amount paid (must be >= contribution + recovery fee)
+    ///
+    /// # Returns
+    /// * `Ok(())` - Recovery successful
+    /// * `Err(StellarSaveError)` - If validation fails
+    pub fn recover_penalty(
+        env: Env,
+        group_id: u64,
+        member: Address,
+        cycle_id: u32,
+        amount_paid: i128,
+    ) -> Result<(), StellarSaveError> {
+        member.require_auth();
+        penalty::recover_penalty(&env, group_id, member, cycle_id, amount_paid)
+    }
+
+    /// Returns the full penalty history for a member in a group.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment
+    /// * `group_id` - ID of the group
+    /// * `member` - Address of the member
+    ///
+    /// # Returns
+    /// * `Vec<PenaltyRecord>` - List of penalty records (empty if none)
+    pub fn get_penalty_history(
+        env: Env,
+        group_id: u64,
+        member: Address,
+    ) -> penalty::PenaltyRecordVec {
+        penalty::get_penalty_history(&env, group_id, member)
+    }
+
+    /// Returns the current penalty state (missed cycles, total penalty) for a member.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment
+    /// * `group_id` - ID of the group
+    /// * `member` - Address of the member
+    ///
+    /// # Returns
+    /// * `MemberPenaltyState` - Current penalty state
+    pub fn get_penalty_state(
+        env: Env,
+        group_id: u64,
+        member: Address,
+    ) -> penalty::MemberPenaltyState {
+        penalty::get_penalty_state(&env, group_id, member)
+    }
+
+    /// Sets a custom penalty configuration for a group.
+    /// Only the group creator can call this while the group is Pending.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment
+    /// * `group_id` - ID of the group
+    /// * `caller` - Must be the group creator
+    /// * `config` - New penalty configuration
+    ///
+    /// # Returns
+    /// * `Ok(())` - Config updated
+    /// * `Err(StellarSaveError)` - If unauthorized or group not found
+    pub fn set_penalty_config(
+        env: Env,
+        group_id: u64,
+        caller: Address,
+        config: penalty::PenaltyConfig,
+    ) -> Result<(), StellarSaveError> {
+        caller.require_auth();
+
+        let group_key = StorageKeyBuilder::group_data(group_id);
+        let group = env
+            .storage()
+            .persistent()
+            .get::<_, Group>(&group_key)
+            .ok_or(StellarSaveError::GroupNotFound)?;
+
+        if group.creator != caller {
+            return Err(StellarSaveError::Unauthorized);
+        }
+
+        penalty::set_penalty_config(&env, group_id, config);
         Ok(())
     }
 }

@@ -96,6 +96,27 @@ pub struct ContractUnpaused {
 /// Utility functions for emitting events.
 pub struct EventEmitter;
 
+/// Event emitted when a penalty is applied to a member for a missed contribution.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PenaltyApplied {
+    pub group_id: u64,
+    pub member: Address,
+    pub amount: i128,
+    pub cycle_id: u32,
+    pub applied_at: u64,
+}
+
+/// Event emitted when a member successfully recovers from a penalty.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PenaltyRecovered {
+    pub group_id: u64,
+    pub member: Address,
+    pub cycle_id: u32,
+    pub recovered_at: u64,
+}
+
 impl EventEmitter {
     pub fn emit_group_created(
         env: &Env,
@@ -231,6 +252,38 @@ impl EventEmitter {
     pub fn emit_contract_unpaused(env: &Env, admin: Address, timestamp: u64) {
         let event = ContractUnpaused { admin, timestamp };
         env.events().publish(("contract_unpaused",), event);
+    }
+
+    pub fn emit_penalty_applied(
+        env: &Env,
+        group_id: u64,
+        member: Address,
+        amount: i128,
+        cycle_id: u32,
+    ) {
+        let event = PenaltyApplied {
+            group_id,
+            member,
+            amount,
+            cycle_id,
+            applied_at: env.ledger().timestamp(),
+        };
+        env.events().publish(("penalty_applied",), event);
+    }
+
+    pub fn emit_penalty_recovered(
+        env: &Env,
+        group_id: u64,
+        member: Address,
+        cycle_id: u32,
+    ) {
+        let event = PenaltyRecovered {
+            group_id,
+            member,
+            cycle_id,
+            recovered_at: env.ledger().timestamp(),
+        };
+        env.events().publish(("penalty_recovered",), event);
     }
 }
 
