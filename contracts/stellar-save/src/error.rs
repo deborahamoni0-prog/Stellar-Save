@@ -22,6 +22,10 @@ pub enum StellarSaveError {
     /// Error Code: 1003
     InvalidState = 1003,
 
+    /// Invalid metadata provided (name, description, or image_url).
+    /// Error Code: 1004
+    InvalidMetadata = 1004,
+
     // Member-related errors (2000-2999)
     /// The address is already a member of this group.
     /// Error Code: 2001
@@ -99,6 +103,9 @@ impl StellarSaveError {
             }
             StellarSaveError::InvalidState => {
                 "The group is not in a valid state for this operation. Check group status."
+            }
+            StellarSaveError::InvalidMetadata => {
+                "Invalid metadata provided. Name must be 3-50 characters, description 0-500 characters."
             }
 
             // Member-related errors

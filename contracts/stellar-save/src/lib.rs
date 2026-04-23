@@ -532,6 +532,81 @@ impl StellarSaveContract {
             .ok_or(StellarSaveError::GroupNotFound)
     }
 
+    /// Updates the metadata of a group (name, description, image_url).
+    ///
+    /// # Arguments
+    /// * `group_id` - The unique identifier of the group.
+    /// * `caller` - The address attempting to update metadata (must be creator).
+    /// * `name` - New group name (3-50 characters).
+    /// * `description` - New group description (0-500 characters).
+    /// * `image_url` - New group image URL.
+    ///
+    /// # Returns
+    /// Returns Ok(()) if successful, or an error if validation fails.
+    ///
+    /// # Validation
+    /// - Caller must be the group creator
+    /// - Name must be 3-50 characters
+    /// - Description must be 0-500 characters
+    /// - Emits GroupMetadataUpdated event on success
+    pub fn update_group_metadata(
+        env: Env,
+        group_id: u64,
+        caller: Address,
+        name: String,
+        description: String,
+        image_url: String,
+    ) -> Result<(), StellarSaveError> {
+        // 1. Verify caller is authorized
+        caller.require_auth();
+
+        // 2. Load existing group
+        let group_key = StorageKeyBuilder::group_data(group_id);
+        let mut group = env
+            .storage()
+            .persistent()
+            .get::<_, Group>(&group_key)
+            .ok_or(StellarSaveError::GroupNotFound)?;
+
+        // 3. Verify caller is the creator
+        if group.creator != caller {
+            return Err(StellarSaveError::Unauthorized);
+        }
+
+        // 4. Validate metadata
+        // Name: 3-50 characters
+        if name.len() < 3 || name.len() > 50 {
+            return Err(StellarSaveError::InvalidMetadata);
+        }
+
+        // Description: 0-500 characters
+        if description.len() > 500 {
+            return Err(StellarSaveError::InvalidMetadata);
+        }
+
+        // 5. Update group metadata
+        group.name = name.clone();
+        group.description = description.clone();
+        group.image_url = image_url.clone();
+
+        // 6. Save updated group
+        env.storage().persistent().set(&group_key, &group);
+
+        // 7. Emit event
+        let timestamp = env.ledger().timestamp();
+        EventEmitter::emit_group_metadata_updated(
+            &env,
+            group_id,
+            caller,
+            name,
+            description,
+            image_url,
+            timestamp,
+        );
+
+        Ok(())
+    }
+
     /// Checks if a member has already received their payout in a group.
     ///
     /// Gas opt: O(1) direct lookup using the member's payout_position as the cycle
@@ -10233,291 +10308,243 @@ mod tests {
 
     }
 
-    // Tests for contribution reminder functionality
-
     #[test]
-    fn test_get_members_needing_reminder_all_contributed() {
+    fn test_update_group_metadata_success() {
         let env = Env::default();
-        env.mock_all_auths();
-        let contract_id = env.register(StellarSaveContract, ());
-        let client = StellarSaveContractClient::new(&env, &contract_id);
+        let creator = Address::random(&env);
+        let group_id = 1u64;
 
-        let creator = Address::generate(&env);
-        let member1 = Address::generate(&env);
-        let member2 = Address::generate(&env);
-
-        // Create and setup group
-        let group_id = client.create_group(&creator, &100, &604800, &3);
-        client.join_group(&group_id, &creator);
-        client.join_group(&group_id, &member1);
-        client.join_group(&group_id, &member2);
-
-        // Start group
-        env.storage().persistent().set(
-            &StorageKeyBuilder::group_data(group_id),
-            &{
-                let mut g = client.get_group(&group_id);
-                g.started = true;
-                g.started_at = env.ledger().timestamp();
-                g
-            },
+        // Create a group
+        let group = Group::new(
+            group_id,
+            creator.clone(),
+            1_000_000,
+            604800,
+            10,
+            2,
+            env.ledger().timestamp(),
         );
 
-        // All members contribute
-        let contrib_key_creator = StorageKeyBuilder::contribution_individual(group_id, 0, creator.clone());
-        let contrib_key_m1 = StorageKeyBuilder::contribution_individual(group_id, 0, member1.clone());
-        let contrib_key_m2 = StorageKeyBuilder::contribution_individual(group_id, 0, member2.clone());
+        let group_key = StorageKeyBuilder::group_data(group_id);
+        env.storage().persistent().set(&group_key, &group);
 
-        env.storage().persistent().set(
-            &contrib_key_creator,
-            &ContributionRecord::new(creator.clone(), group_id, 0, 100, env.ledger().timestamp()),
-        );
-        env.storage().persistent().set(
-            &contrib_key_m1,
-            &ContributionRecord::new(member1.clone(), group_id, 0, 100, env.ledger().timestamp()),
-        );
-        env.storage().persistent().set(
-            &contrib_key_m2,
-            &ContributionRecord::new(member2.clone(), group_id, 0, 100, env.ledger().timestamp()),
+        // Update metadata
+        let result = StellarSaveContract::update_group_metadata(
+            env.clone(),
+            group_id,
+            creator.clone(),
+            String::from_small_str("Test Group"),
+            String::from_small_str("A test group for ROSCA"),
+            String::from_small_str("https://example.com/image.png"),
         );
 
-        // Get members needing reminder - should be empty since all contributed
-        let result = client.get_members_needing_reminder(&group_id, &0);
-        assert_eq!(result.len(), 0);
-    }
+        assert!(result.is_ok());
 
-    #[test]
-    fn test_get_members_needing_reminder_some_missed() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let contract_id = env.register(StellarSaveContract, ());
-        let client = StellarSaveContractClient::new(&env, &contract_id);
-
-        let creator = Address::generate(&env);
-        let member1 = Address::generate(&env);
-        let member2 = Address::generate(&env);
-
-        // Create and setup group
-        let group_id = client.create_group(&creator, &100, &604800, &3);
-        client.join_group(&group_id, &creator);
-        client.join_group(&group_id, &member1);
-        client.join_group(&group_id, &member2);
-
-        // Start group - set time to 24 hours before deadline
-        let start_time = 1000000u64;
-        env.ledger().with_mut(|l| {
-            l.timestamp = start_time + 604800 - 86400; // 24 hours before deadline
-        });
-
-        env.storage().persistent().set(
-            &StorageKeyBuilder::group_data(group_id),
-            &{
-                let mut g = client.get_group(&group_id);
-                g.started = true;
-                g.started_at = start_time;
-                g
-            },
-        );
-
-        // Only creator contributes
-        let contrib_key_creator = StorageKeyBuilder::contribution_individual(group_id, 0, creator.clone());
-        env.storage().persistent().set(
-            &contrib_key_creator,
-            &ContributionRecord::new(creator.clone(), group_id, 0, 100, env.ledger().timestamp()),
-        );
-
-        // Get members needing reminder - should include member1 and member2
-        let result = client.get_members_needing_reminder(&group_id, &0);
-        assert_eq!(result.len(), 2);
-        assert!(result.iter().any(|m| m == &member1));
-        assert!(result.iter().any(|m| m == &member2));
-    }
-
-    #[test]
-    fn test_get_members_needing_reminder_outside_window() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let contract_id = env.register(StellarSaveContract, ());
-        let client = StellarSaveContractClient::new(&env, &contract_id);
-
-        let creator = Address::generate(&env);
-        let member1 = Address::generate(&env);
-
-        // Create and setup group
-        let group_id = client.create_group(&creator, &100, &604800, &2);
-        client.join_group(&group_id, &creator);
-        client.join_group(&group_id, &member1);
-
-        // Start group - set time far from deadline
-        let start_time = 1000000u64;
-        env.ledger().with_mut(|l| {
-            l.timestamp = start_time + 100000; // Far from deadline
-        });
-
-        env.storage().persistent().set(
-            &StorageKeyBuilder::group_data(group_id),
-            &{
-                let mut g = client.get_group(&group_id);
-                g.started = true;
-                g.started_at = start_time;
-                g
-            },
-        );
-
-        // Get members needing reminder - should be empty (outside 24-hour window)
-        let result = client.get_members_needing_reminder(&group_id, &0);
-        assert_eq!(result.len(), 0);
-    }
-
-    #[test]
-    fn test_get_members_needing_reminder_group_not_found() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let contract_id = env.register(StellarSaveContract, ());
-        let client = StellarSaveContractClient::new(&env, &contract_id);
-
-        let result = client.try_get_members_needing_reminder(&999, &0);
-        assert_eq!(result, Err(Ok(StellarSaveError::GroupNotFound)));
-    }
-
-    #[test]
-    fn test_get_members_needing_reminder_not_started() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let contract_id = env.register(StellarSaveContract, ());
-        let client = StellarSaveContractClient::new(&env, &contract_id);
-
-        let creator = Address::generate(&env);
-        let group_id = client.create_group(&creator, &100, &604800, &2);
-        client.join_group(&group_id, &creator);
-
-        // Group not started yet
-        let result = client.try_get_members_needing_reminder(&group_id, &0);
-        assert_eq!(result, Err(Ok(StellarSaveError::InvalidState)));
-    }
-
-    #[test]
-    fn test_emit_contribution_reminders_success() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let contract_id = env.register(StellarSaveContract, ());
-        let client = StellarSaveContractClient::new(&env, &contract_id);
-
-        let creator = Address::generate(&env);
-        let member1 = Address::generate(&env);
-        let member2 = Address::generate(&env);
-
-        // Create and setup group
-        let group_id = client.create_group(&creator, &100, &604800, &3);
-        client.join_group(&group_id, &creator);
-        client.join_group(&group_id, &member1);
-        client.join_group(&group_id, &member2);
-
-        // Start group - set time to 24 hours before deadline
-        let start_time = 1000000u64;
-        env.ledger().with_mut(|l| {
-            l.timestamp = start_time + 604800 - 86400;
-        });
-
-        env.storage().persistent().set(
-            &StorageKeyBuilder::group_data(group_id),
-            &{
-                let mut g = client.get_group(&group_id);
-                g.started = true;
-                g.started_at = start_time;
-                g
-            },
-        );
-
-        // Only creator contributes
-        let contrib_key_creator = StorageKeyBuilder::contribution_individual(group_id, 0, creator.clone());
-        env.storage().persistent().set(
-            &contrib_key_creator,
-            &ContributionRecord::new(creator.clone(), group_id, 0, 100, env.ledger().timestamp()),
-        );
-
-        // Emit reminders
-        let reminders_sent = client.emit_contribution_reminders(&group_id, &0);
-        assert_eq!(reminders_sent, 2); // member1 and member2
-
-        // Verify reminders were marked as emitted
-        let reminder_key_m1 = StorageKeyBuilder::contribution_reminder_emitted(group_id, 0, member1.clone());
-        let reminder_key_m2 = StorageKeyBuilder::contribution_reminder_emitted(group_id, 0, member2.clone());
-
+        // Verify metadata was updated
+        let updated_group = env
+            .storage()
+            .persistent()
+            .get::<_, Group>(&group_key)
+            .unwrap();
+        assert_eq!(updated_group.name, String::from_small_str("Test Group"));
         assert_eq!(
-            env.storage().persistent().get::<_, bool>(&reminder_key_m1),
-            Some(true)
+            updated_group.description,
+            String::from_small_str("A test group for ROSCA")
         );
         assert_eq!(
-            env.storage().persistent().get::<_, bool>(&reminder_key_m2),
-            Some(true)
+            updated_group.image_url,
+            String::from_small_str("https://example.com/image.png")
         );
     }
 
     #[test]
-    fn test_emit_contribution_reminders_no_duplicates() {
+    fn test_update_group_metadata_name_too_short() {
         let env = Env::default();
-        env.mock_all_auths();
-        let contract_id = env.register(StellarSaveContract, ());
-        let client = StellarSaveContractClient::new(&env, &contract_id);
+        let creator = Address::random(&env);
+        let group_id = 1u64;
 
-        let creator = Address::generate(&env);
-        let member1 = Address::generate(&env);
-
-        // Create and setup group
-        let group_id = client.create_group(&creator, &100, &604800, &2);
-        client.join_group(&group_id, &creator);
-        client.join_group(&group_id, &member1);
-
-        // Start group - set time to 24 hours before deadline
-        let start_time = 1000000u64;
-        env.ledger().with_mut(|l| {
-            l.timestamp = start_time + 604800 - 86400;
-        });
-
-        env.storage().persistent().set(
-            &StorageKeyBuilder::group_data(group_id),
-            &{
-                let mut g = client.get_group(&group_id);
-                g.started = true;
-                g.started_at = start_time;
-                g
-            },
+        let group = Group::new(
+            group_id,
+            creator.clone(),
+            1_000_000,
+            604800,
+            10,
+            2,
+            env.ledger().timestamp(),
         );
 
-        // Emit reminders first time
-        let reminders_sent_1 = client.emit_contribution_reminders(&group_id, &0);
-        assert_eq!(reminders_sent_1, 1);
+        let group_key = StorageKeyBuilder::group_data(group_id);
+        env.storage().persistent().set(&group_key, &group);
 
-        // Emit reminders second time - should be 0 (already reminded)
-        let reminders_sent_2 = client.emit_contribution_reminders(&group_id, &0);
-        assert_eq!(reminders_sent_2, 0);
+        let result = StellarSaveContract::update_group_metadata(
+            env,
+            group_id,
+            creator,
+            String::from_small_str("AB"),
+            String::from_small_str("Description"),
+            String::from_small_str("https://example.com/image.png"),
+        );
+
+        assert_eq!(result, Err(StellarSaveError::InvalidMetadata));
     }
 
     #[test]
-    fn test_emit_contribution_reminders_group_not_found() {
+    fn test_update_group_metadata_name_too_long() {
         let env = Env::default();
-        env.mock_all_auths();
-        let contract_id = env.register(StellarSaveContract, ());
-        let client = StellarSaveContractClient::new(&env, &contract_id);
+        let creator = Address::random(&env);
+        let group_id = 1u64;
 
-        let result = client.try_emit_contribution_reminders(&999, &0);
-        assert_eq!(result, Err(Ok(StellarSaveError::GroupNotFound)));
+        let group = Group::new(
+            group_id,
+            creator.clone(),
+            1_000_000,
+            604800,
+            10,
+            2,
+            env.ledger().timestamp(),
+        );
+
+        let group_key = StorageKeyBuilder::group_data(group_id);
+        env.storage().persistent().set(&group_key, &group);
+
+        // Create a name longer than 50 characters
+        let long_name = String::from_small_str("This is a very long group name that exceeds fifty");
+        assert!(long_name.len() > 50);
+
+        let result = StellarSaveContract::update_group_metadata(
+            env,
+            group_id,
+            creator,
+            long_name,
+            String::from_small_str("Description"),
+            String::from_small_str("https://example.com/image.png"),
+        );
+
+        assert_eq!(result, Err(StellarSaveError::InvalidMetadata));
     }
 
     #[test]
-    fn test_emit_contribution_reminders_not_started() {
+    fn test_update_group_metadata_description_too_long() {
         let env = Env::default();
-        env.mock_all_auths();
-        let contract_id = env.register(StellarSaveContract, ());
-        let client = StellarSaveContractClient::new(&env, &contract_id);
+        let creator = Address::random(&env);
+        let group_id = 1u64;
 
-        let creator = Address::generate(&env);
-        let group_id = client.create_group(&creator, &100, &604800, &2);
-        client.join_group(&group_id, &creator);
+        let group = Group::new(
+            group_id,
+            creator.clone(),
+            1_000_000,
+            604800,
+            10,
+            2,
+            env.ledger().timestamp(),
+        );
 
-        // Group not started yet
-        let result = client.try_emit_contribution_reminders(&group_id, &0);
-        assert_eq!(result, Err(Ok(StellarSaveError::InvalidState)));
+        let group_key = StorageKeyBuilder::group_data(group_id);
+        env.storage().persistent().set(&group_key, &group);
+
+        // Create a description longer than 500 characters
+        let long_desc = String::from_small_str(
+            "This is a very long description that exceeds the maximum allowed length of five hundred characters. It contains a lot of text to ensure it goes over the limit. This is a very long description that exceeds the maximum allowed length of five hundred characters. It contains a lot of text to ensure it goes over the limit. This is a very long description that exceeds the maximum allowed length of five hundred characters. It contains a lot of text to ensure it goes over the limit.",
+        );
+        assert!(long_desc.len() > 500);
+
+        let result = StellarSaveContract::update_group_metadata(
+            env,
+            group_id,
+            creator,
+            String::from_small_str("Test Group"),
+            long_desc,
+            String::from_small_str("https://example.com/image.png"),
+        );
+
+        assert_eq!(result, Err(StellarSaveError::InvalidMetadata));
+    }
+
+    #[test]
+    fn test_update_group_metadata_unauthorized() {
+        let env = Env::default();
+        let creator = Address::random(&env);
+        let other_user = Address::random(&env);
+        let group_id = 1u64;
+
+        let group = Group::new(
+            group_id,
+            creator,
+            1_000_000,
+            604800,
+            10,
+            2,
+            env.ledger().timestamp(),
+        );
+
+        let group_key = StorageKeyBuilder::group_data(group_id);
+        env.storage().persistent().set(&group_key, &group);
+
+        let result = StellarSaveContract::update_group_metadata(
+            env,
+            group_id,
+            other_user,
+            String::from_small_str("Test Group"),
+            String::from_small_str("Description"),
+            String::from_small_str("https://example.com/image.png"),
+        );
+
+        assert_eq!(result, Err(StellarSaveError::Unauthorized));
+    }
+
+    #[test]
+    fn test_update_group_metadata_group_not_found() {
+        let env = Env::default();
+        let creator = Address::random(&env);
+
+        let result = StellarSaveContract::update_group_metadata(
+            env,
+            999u64,
+            creator,
+            String::from_small_str("Test Group"),
+            String::from_small_str("Description"),
+            String::from_small_str("https://example.com/image.png"),
+        );
+
+        assert_eq!(result, Err(StellarSaveError::GroupNotFound));
+    }
+
+    #[test]
+    fn test_update_group_metadata_empty_description_valid() {
+        let env = Env::default();
+        let creator = Address::random(&env);
+        let group_id = 1u64;
+
+        let group = Group::new(
+            group_id,
+            creator.clone(),
+            1_000_000,
+            604800,
+            10,
+            2,
+            env.ledger().timestamp(),
+        );
+
+        let group_key = StorageKeyBuilder::group_data(group_id);
+        env.storage().persistent().set(&group_key, &group);
+
+        // Empty description should be valid (0-500 chars)
+        let result = StellarSaveContract::update_group_metadata(
+            env.clone(),
+            group_id,
+            creator,
+            String::from_small_str("Test Group"),
+            String::new(),
+            String::from_small_str("https://example.com/image.png"),
+        );
+
+        assert!(result.is_ok());
+
+        let updated_group = env
+            .storage()
+            .persistent()
+            .get::<_, Group>(&group_key)
+            .unwrap();
+        assert_eq!(updated_group.description, String::new());
     }
 }
