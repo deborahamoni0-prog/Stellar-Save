@@ -14,11 +14,19 @@ import { EmptyState } from '../components/EmptyState/EmptyState';
 import { useDiscoveryFeed } from '../hooks/useDiscoveryFeed';
 import { ROUTES } from '../routing/constants';
 import type { PublicGroup } from '../types/group';
+import type { GroupFilters as GroupFiltersType } from '../types/group';
 import './BrowseGroupsPage.css';
+
+const SAVED_SEARCH_KEY = 'stellar-save:search-preferences';
 
 function BrowseGroupsContent() {
   const navigate = useNavigate();
   const { addToast } = useToast();
+
+  const [savedSearch, setSavedSearch] = useLocalStorage<Partial<GroupFiltersType>>(
+    SAVED_SEARCH_KEY,
+    {}
+  );
 
   const {
     recommendations,
@@ -43,6 +51,24 @@ function BrowseGroupsContent() {
     filters.maxAmount !== '' ||
     filters.minMembers !== '' ||
     filters.maxMembers !== '';
+
+  // Derive autocomplete suggestions from all loaded group names
+  const suggestions = useMemo(() => groups.map((g) => g.name), [groups]);
+
+  const handleSearch = (q: string) => {
+    setFilters({ search: q });
+    setSavedSearch((prev) => ({ ...prev, search: q }));
+  };
+
+  const handleFilterChange = (f: Parameters<typeof setFilters>[0]) => {
+    setFilters(f);
+    setSavedSearch((prev) => ({ ...prev, ...f }));
+  };
+
+  const handleClearFilters = () => {
+    clearFilters();
+    setSavedSearch({});
+  };
 
   const handleJoinConfirm = (group: PublicGroup) => {
     setJoinGroup(null);
@@ -88,9 +114,11 @@ function BrowseGroupsContent() {
               <div className="browse-groups-controls">
                 <SearchBar
                   placeholder="Search groups by name or keyword..."
-                  onSearch={(q) => setFilters({ search: q })}
+                  onSearch={handleSearch}
                   debounceMs={300}
                   loading={isLoading}
+                  defaultValue={filters.search}
+                  suggestions={suggestions}
                 />
                 <div className="browse-groups-controls-right">
                   <GroupFilters onFilterChange={(f) => setFilters(f)} initialFilters={filters} />
@@ -171,7 +199,9 @@ export default function BrowseGroupsPage() {
         title="Browse Groups"
         subtitle="Discover recommended groups based on your preferences and activity"
         footerText="Stellar Save - Built for transparent, on-chain savings"
-        navItems={[{ key: 'create', label: 'Create Group', onClick: () => navigate(ROUTES.GROUP_CREATE) }]}
+        navItems={[
+          { key: 'create', label: 'Create Group', onClick: () => navigate(ROUTES.GROUP_CREATE) },
+        ]}
       >
         <BrowseGroupsContent />
       </AppLayout>
