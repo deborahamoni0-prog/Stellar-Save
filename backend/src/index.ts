@@ -1,6 +1,9 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import { ApolloServer } from '@apollo/server';
+import { expressMiddleware } from '@apollo/server/express4';
+import { makeExecutableSchema } from '@graphql-tools/schema';
 import { RecommendationEngine } from './recommendation';
 import { ABTestingFramework } from './ab_testing';
 import { Group, UserInteraction } from './models';
@@ -19,6 +22,30 @@ dotenv.config();
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// ── GraphQL ───────────────────────────────────────────────────────────────────
+const schema = makeExecutableSchema({ typeDefs, resolvers });
+const apolloServer = new ApolloServer({
+  schema,
+  validationRules,
+  introspection: true,
+});
+
+// Apollo must be started before attaching middleware
+apolloServer.start().then(() => {
+  // Playground: GET /graphql returns Apollo Sandbox redirect
+  app.get('/graphql', (_req, res) => {
+    res.send(`
+      <!DOCTYPE html><html><head><title>GraphQL Playground</title></head><body>
+      <script>window.location.href = 'https://studio.apollographql.com/sandbox/explorer?endpoint=' + encodeURIComponent(window.location.origin + '/graphql');</script>
+      </body></html>
+    `);
+  });
+
+  app.use('/graphql', expressMiddleware(apolloServer, {
+    context: async () => ({}),
+  }));
+});
 
 const PORT = process.env.PORT || 3001;
 
@@ -48,6 +75,8 @@ const backupMonitor = new BackupMonitor(backupService, {
   alertWebhookUrl: process.env.BACKUP_ALERT_WEBHOOK_URL,
 });
 
+const adminService = new AdminService();
+
 if (process.env.BACKUP_ENABLED === 'true') {
   backupScheduler.start();
   backupMonitor.start();
@@ -71,6 +100,61 @@ app.use((req, res, next) => {
   next();
 });
 app.use('/', createV1Router(services));
+
+// ── Admin Routes ────────────────────────────────────────────────────────────
+
+const adminRouter = express.Router();
+adminRouter.use(adminAuthMiddleware);
+
+/**
+ * @api {get} /admin/stats Get platform statistics
+ */
+adminRouter.get('/stats', (req, res) => {
+  res.json(adminService.getPlatformStats());
+});
+
+/**
+ * @api {get} /admin/users List all users
+ */
+adminRouter.get('/users', (req, res) => {
+  res.json(adminService.getUsers());
+});
+
+/**
+ * @api {get} /admin/users/:id Get user details
+ */
+adminRouter.get('/users/:id', (req, res) => {
+  const user = adminService.getUserById(req.params.id);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  res.json(user);
+});
+
+/**
+ * @api {patch} /admin/users/:id Update user details
+ */
+adminRouter.patch('/users/:id', (req: AuthenticatedRequest, res) => {
+  const user = adminService.updateUser(req.params.id, req.body, req.adminId!);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  res.json(user);
+});
+
+/**
+ * @api {delete} /admin/users/:id Delete user
+ */
+adminRouter.delete('/users/:id', (req: AuthenticatedRequest, res) => {
+  const success = adminService.deleteUser(req.params.id, req.adminId!);
+  if (!success) return res.status(404).json({ error: 'User not found' });
+  res.json({ message: 'User deleted' });
+});
+
+/**
+ * @api {get} /admin/audit-logs Get audit logs
+ */
+adminRouter.get('/audit-logs', (req, res) => {
+  res.json(adminService.getAuditLogs());
+});
+
+app.use('/admin', adminRouter);
 
 app.listen(PORT, () => {
   console.log(`API server running on port ${PORT}`);
